@@ -1,4 +1,4 @@
-pacman::p_load(tidyverse,vroom,data.table,TwoSampleMR)
+pacman::p_load(tidyverse,vroom,data.table,TwoSampleMR, ggforestplot)
 
 il6_path_exposures <- vroom("https://raw.githubusercontent.com/gushamilton/il6-sepsis/main/data/harmonised_data_final.tsv")%>%
   mutate(beta.exposure = if_else(SNP == "rs3093077", -beta.exposure, beta.exposure)) %>%
@@ -10,11 +10,12 @@ il6_path_exposures <- vroom("https://raw.githubusercontent.com/gushamilton/il6-s
 
 IL6R_start <- 154377819 - 3e5
 IL6R_end <- 154441926 +3e5
-IL6R_end
 tnf_start <- 6437923-3e5 
 tnf_end <- 6451280 + 3e5
-il1ra_start <- 113875548
-il1ra_end <- 113891591
+il1ra_start <- 113875548 -3e5
+il1ra_end <- 113891591 + 3e5
+crp_start <- 159682079 -3e5
+crp_end <- 159684379 + 3e5
 crp  <- data.table::fread("~/data/CRP/gwas/GCST90029070_buildGRCh37.tsv.gz") 
 
 tnf_exposures <- crp %>%
@@ -42,16 +43,42 @@ il1ra_clumped <- il1ra %>%
   filter(pval.exposure < 5e-8)  %>%
   clump_data(clump_r2 = 0.2)
 
-all_exposures <- bind_rows(tnf_exposures_clumped, il6_path_exposures, il1ra_clumped)
+
+il6r_clumped <- crp %>%
+  filter(chromosome == 1 & (base_pair_location > IL6R_start) & (base_pair_location < IL6R_end)) %>%
+  select(SNP = variant_id, effect_allele.exposure = effect_allele, other_allele.exposure = other_allele, beta.exposure = beta, se.exposure = standard_error, pval.exposure = p_value) %>%
+  as_tibble() %>%
+  mutate(eaf.exposure = NA) %>%
+  mutate(exposure ="IL-6", id.exposure = "IL-6") %>%
+  mutate(pval.exposure = as.numeric(pval.exposure)) %>%
+  filter(pval.exposure < 5e-8)  %>%
+  clump_data(clump_r2 = 0.2)
+
+
+crp_clumped <- crp %>%
+  filter(chromosome == 1 & (base_pair_location > crp_start) & (base_pair_location < crp_end)) %>%
+  select(SNP = variant_id, effect_allele.exposure = effect_allele, other_allele.exposure = other_allele, beta.exposure = beta, se.exposure = standard_error, pval.exposure = p_value) %>%
+  as_tibble() %>%
+  mutate(eaf.exposure = NA) %>%
+  mutate(exposure ="CRP", id.exposure = "CRP") %>%
+  mutate(pval.exposure = as.numeric(pval.exposure)) %>%
+  filter(pval.exposure < 5e-8)  %>%
+  clump_data(clump_r2 = 0.2)
+
+all_exposures <- bind_rows(tnf_exposures_clumped, il6r_clumped, crp_clumped, il1ra_clumped)
 all_exposures %>%
   count(exposure)
 
-ao <-available_outcomes()
+ao <-ieugwasr::gwasinfo()
 
 lipid_concs <- ao %>%
   filter(str_detect(id, "met-d")) %>%
   filter(str_detect(trait, "Conce|Apo")) %>%
   pull(id)
+
+
+
+
 outcomes_met <- extract_outcome_data(all_exposures$SNP, lipid_concs)
 
 # GLCC
@@ -75,7 +102,15 @@ glcc_outcomes <- glcc %>%
   mutate(outcome = paste(str_remove(outcome, "_INV_EUR_HRC_1KGP3_others_ALL.meta.singlevar.results"), "GLCC")) %>%
   mutate(id.outcome = outcome)
 
+
 outcomes <- bind_rows(glcc_outcomes, outcomes_met)
             
 dat <- harmonise_data(all_exposures, outcomes, action = 1)
 write_tsv(dat, "harmonised_exposure_outcome.dat")
+res <- mr(dat, method = "mr_ivw")
+res %>%
+  forestplot(name = outcome,
+             colour = exposure,
+             estimate = b,
+             se = se)
+  
